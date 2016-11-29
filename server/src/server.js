@@ -20,6 +20,7 @@ app.use(express.static('../client/build'));
 var database = require('./database');
 var readDocument = database.readDocument;
 var StatusUpdateSchema = require('./schemas/statusupdate.json');
+var CommentSchema = require('./schemas/comment.json');
 var validate = require('express-jsonschema').validate;
 var writeDocument = database.writeDocument;
 var addDocument = database.addDocument;
@@ -250,6 +251,31 @@ app.put('/feeditem/:feeditemid/likelist/:userid', function(req, res) {
   }
 });
 
+// Unlike a feed item.
+app.delete('/feeditem/:feeditemid/likelist/:userid', function(req, res) {
+  var fromUser = getUserIdFromToken(req.get('Authorization'));
+  // Convert params from string to number.
+  var feedItemId = parseInt(req.params.feeditemid, 10);
+  var userId = parseInt(req.params.userid, 10);
+  if (fromUser === userId) {
+    var feedItem = readDocument('feedItems', feedItemId);
+    var likeIndex = feedItem.likeCounter.indexOf(userId);
+    // Remove from likeCounter if present
+    if (likeIndex !== -1) {
+      feedItem.likeCounter.splice(likeIndex, 1);
+      writeDocument('feedItems', feedItem);
+    }
+    // Return a resolved version of the likeCounter
+    // Note that this request succeeds even if the
+    // user already unliked the request!
+      res.send(feedItem.likeCounter.map((userId) =>
+      readDocument('users', userId)));
+    } else {
+      // 401: Unauthorized.
+      res.status(401).end();
+  }
+});
+
 // Search for feed item
 app.post('/search', function(req, res) {
   var fromUser = getUserIdFromToken(req.get('Authorization'));
@@ -279,6 +305,87 @@ app.post('/search', function(req, res) {
       // 400: Bad Request.
       res.status(400).end();
     }
+});
+
+/**
+ * Adds a new comment to the database on the given feed item.
+ */
+function postComment(feedItemId, author, contents) {
+  var feedItem = readDocument('feedItems', feedItemId);
+  feedItem.comments.push({
+    "author": author,
+    "contents": contents,
+    "postDate": new Date().getTime(),
+    "likeCounter": []
+  });
+  writeDocument('feedItems', feedItem);
+  // Return a resolved version of the feed item.
+  //emulateServerReturn(getFeedItemSync(feedItemId), cb);
+  return getFeedItemSync(feedItemId);
+}
+
+app.post('/feeditem/:feeditemid/comment',
+        validate({ body: CommentSchema}), function(req, res){
+
+    var fromUser = getUserIdFromToken(req.get('Authorization'));
+    var body = req.body;
+    var feedItemId = req.params.feeditemid;
+    if(fromUser === body.author) {
+    var newFeed = postComment(feedItemId, body.author, body.contents);
+
+    res.status(201);
+    res.set('Location', '/feeditem/' + newFeed._id);
+
+    res.send(newFeed);
+  } else {
+    res.status(401).end();
+  }
+
+});
+
+// Like a comment
+app.put('/feeditem/:feeditemid/comment/:commentid/likelist/:userid', function(req, res){
+  var fromUser = getUserIdFromToken(req.get('Authorization'));
+
+  var feedItemId = parseInt(req.params.feeditemid, 10);
+  var userId = parseInt(req.params.userid, 10);
+  var commentIdx = parseInt(req.params.commentid, 10);
+
+  if(fromUser === userId){
+    var feedItem = readDocument('feedItems', feedItemId);
+    var comment = feedItem.comments[commentIdx];
+    comment.likeCounter.push(userId);
+    writeDocument('feedItems', feedItem);
+    comment.author = readDocument('users', comment.author);
+
+    res.send(comment);
+  }else {
+    res.status(401).end();
+  }
+});
+
+// Unlike a comment
+app.delete('/feeditem/:feeditemid/comment/:commentid/likelist/:userid', function(req, res){
+  var fromUser = getUserIdFromToken(req.get('Authorization'));
+
+  var feedItemId = parseInt(req.params.feeditemid, 10);
+  var userId = parseInt(req.params.userid, 10);
+  var commentIdx = parseInt(req.params.commentid, 10);
+
+  if(fromUser === userId){
+    var feedItem = readDocument('feedItems', feedItemId);
+    var comment = feedItem.comments[commentIdx];
+    var userIndex = comment.likeCounter.indexOf(userId);
+    if (userIndex !== -1) {
+      comment.likeCounter.splice(userIndex, 1);
+      writeDocument('feedItems', feedItem);
+    }
+    comment.author = readDocument('users', comment.author);
+    // Return a resolved version of the likeCounter
+    res.send(comment);
+  } else{
+    res.status(401).end();
+  }
 });
 
 /**
